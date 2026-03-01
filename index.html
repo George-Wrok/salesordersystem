@@ -1238,9 +1238,11 @@
             try {
                 document.getElementById('db-status-text').textContent = "正在載入雲端資料庫...";
 
+                // Handle Google Sheets CORS redirects by using a CORS proxy
+                const corsProxy = "https://corsproxy.io/?";
                 const [resCustomers, resPromo] = await Promise.all([
-                    fetch(CUSTOMER_API_URL),
-                    fetch(PROMO_API_URL)
+                    fetch(corsProxy + encodeURIComponent(CUSTOMER_API_URL)),
+                    fetch(corsProxy + encodeURIComponent(PROMO_API_URL))
                 ]);
 
                 if (!resCustomers.ok || !resPromo.ok) {
