@@ -5,9 +5,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>企業專屬促銷訂購網頁</title>
-    <!-- 引入 sql.js (WebAssembly SQLite) -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js"></script>
-
     <!-- Google Fonts -->
     <link
         href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+TC:wght@300;400;500;700&display=swap"
@@ -1046,11 +1043,11 @@
     <div id="login-overlay" class="overlay">
         <div class="login-card">
             <h2>客戶登入中心</h2>
-            <p>本系統直接連結底層 SQLite 資料庫</p>
+            <p>本系統直接連結 Google Sheets 雲端資料庫</p>
 
             <div class="system-status" id="sys-status">
                 <span class="db-status-icon" id="db-indicator"></span>
-                <span id="db-status-text">正在下載並載入資料庫引擎 (sql.js)...</span>
+                <span id="db-status-text">正在載入雲端資料...</span>
             </div>
 
             <input type="text" id="login-input" class="form-input" placeholder="請輸入客戶標號 (例: C001)" autocomplete="off"
@@ -1096,11 +1093,11 @@
                 <line x1="8" y1="21" x2="16" y2="21"></line>
                 <line x1="12" y1="17" x2="12" y2="21"></line>
             </svg>
-            企業促銷下單系統 (SQLite Edition)
+            企業促銷下單系統 (Cloud Edition)
         </div>
         <div
             style="font-size: 0.875rem; color: var(--text-muted); font-weight: 500; display: flex; align-items: center; gap: 0.5rem;">
-            <span class="db-status-icon ready"></span> 本機資料庫已連線
+            <span class="db-status-icon ready"></span> 雲端資料庫已連線
         </div>
     </header>
 
@@ -1223,37 +1220,40 @@
 
     <script>
         // ==========================================
-        // 核心：WebAssembly SQLite 資料庫引擎 (sql.js)
+        // 核心：Google Sheets 雲端資料庫
         // ==========================================
-        let db = null;        // SQLite Database 物件
-        let SQL = null;       // SQL.js 模組
+        const CUSTOMER_API_URL = "https://script.google.com/macros/s/AKfycbx94HC0BGOGI65zY49hgH1SfNd-n6pthAMZKJVZhKY_7t0qs-Zt4RIu0DE1xyprmETuxQ/exec";
+        const PROMO_API_URL = "https://script.google.com/macros/s/AKfycbzlluNWg60I6cLZ_Tzfde4oABj31cNJzS8dAGkPM6MOzTdsvLCBV_5ghpGwkNqMoj6e/exec";
+
+        let customersData = [];
+        let rawPromoList = [];
         let cart = {};        // 購物車狀態
         let currentCustomer = null;
         let allProducts = []; // 儲存所有商品資料以供分類篩選
         let currentCategory = '全部商品';
         let currentSearchTerm = ''; // 當前搜尋關鍵字
 
-        // 初始化資料庫
+        // 初始化資料庫 (從 Google Sheet)
         async function initDatabase() {
             try {
-                // 1. 載入 sql.js 的 WASM 檔案
-                const sqlPromise = initSqlJs({ locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}` });
+                document.getElementById('db-status-text').textContent = "正在載入雲端資料庫...";
 
-                // 2. 透過 fetch 抓取靜態的 database.db 檔案
-                // 加入時間戳記避免瀏覽器快取住舊的資料庫檔案
-                const dataPromise = fetch("database.db?t=" + new Date().getTime()).then(res => {
-                    if (!res.ok) throw new Error("找不到 database.db 檔案。請確保有執行 create_db.py 產生資料庫，並放在同一層資料夾。");
-                    return res.arrayBuffer();
-                });
+                const [resCustomers, resPromo] = await Promise.all([
+                    fetch(CUSTOMER_API_URL),
+                    fetch(PROMO_API_URL)
+                ]);
 
-                // 等待兩者都完成
-                const [SQLInstance, buf] = await Promise.all([sqlPromise, dataPromise]);
-                SQL = SQLInstance;
+                if (!resCustomers.ok || !resPromo.ok) {
+                    throw new Error("無法連接至 Google Sheets 資料來源");
+                }
 
-                // 3. 把二進位資料實例化成 SQLite 資料庫
-                db = new SQL.Database(new Uint8Array(buf));
+                const rawCustomersInfo = await resCustomers.json();
+                const rawPromoInfo = await resPromo.json();
 
-                console.log("✅ SQLite 資料庫已在瀏覽器記憶體中載入完畢！");
+                customersData = Array.isArray(rawCustomersInfo) ? rawCustomersInfo : (rawCustomersInfo.data || Object.values(rawCustomersInfo)[0] || []);
+                rawPromoList = Array.isArray(rawPromoInfo) ? rawPromoInfo : (rawPromoInfo.data || Object.values(rawPromoInfo)[0] || []);
+
+                console.log("✅ Google Sheets 資料已載入完畢！");
 
                 // 更新 UI 狀態，允許登入
                 document.getElementById('db-indicator').classList.add('ready');
@@ -1271,7 +1271,7 @@
         }
 
         // ==========================================
-        // 前台邏輯與 SQL 查詢
+        // 前台邏輯與資料查詢
         // ==========================================
 
         // 登入驗證
@@ -1284,14 +1284,11 @@
                 return;
             }
 
-            // ⚠️ 執行真實的 SQL 查詢來驗證客戶
             try {
-                // 改為動態掃描所有客戶資料，以相容您從 Excel 匯入的中文欄位名稱
-                const stmt = db.prepare("SELECT * FROM Customers");
                 let matchedObj = null;
 
-                while (stmt.step()) {
-                    const row = stmt.getAsObject();
+                for (let i = 0; i < customersData.length; i++) {
+                    const row = customersData[i];
                     // 掃描哪些欄位像 ID (如 'id', '客代', '客戶', '客戶編號')
                     const matchedId = row['id'] || row['客代'] || row['客戶'] || row['客戶編號'] || row['ID'] || row['Customer_ID'];
 
@@ -1300,7 +1297,6 @@
                         break;
                     }
                 }
-                stmt.free(); // 釋放記憶體
 
                 if (matchedObj) {
                     // 登入成功
@@ -1388,14 +1384,13 @@
             document.getElementById('login-input').focus();
         }
 
-        // 查詢並顯示促銷品 (從 Promotion 資料表)
+        // 查詢並顯示促銷品 (從 Promotion 資料)
         function loadProducts() {
             try {
-                // 如果尚未載入，則讀取資料庫
+                // 如果尚未處理過，則解析資料
                 if (allProducts.length === 0) {
-                    const stmt = db.prepare("SELECT * FROM Promotion");
-                    while (stmt.step()) {
-                        const row = stmt.getAsObject();
+                    for (let i = 0; i < rawPromoList.length; i++) {
+                        const row = rawPromoList[i];
 
                         // 動態抓取欄位名稱，以相容您從 Excel 匯入的中文欄位名稱
                         const rId = row['id'] || row['編號'] || row['商品代碼'] || `P${allProducts.length + 1}`;
@@ -1452,7 +1447,6 @@
                             price_tiers: priceTiers
                         });
                     }
-                    stmt.free();
                 }
 
                 renderCategories();
