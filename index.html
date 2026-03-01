@@ -1238,22 +1238,22 @@
             try {
                 document.getElementById('db-status-text').textContent = "正在載入雲端資料庫...";
 
-                // Handle Google Sheets CORS redirects by using a CORS proxy
-                const corsProxy = "https://corsproxy.io/?";
+                // 使用 AllOrigins CORS Proxy (這可以避免檔案太大造成的 413 錯誤)
+                const fetchWithProxy = async (url) => {
+                    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+                    const response = await fetch(proxyUrl);
+                    if (!response.ok) throw new Error("Proxy fetch failed");
+                    const data = await response.json();
+                    return JSON.parse(data.contents);
+                };
+
                 const [resCustomers, resPromo] = await Promise.all([
-                    fetch(corsProxy + encodeURIComponent(CUSTOMER_API_URL)),
-                    fetch(corsProxy + encodeURIComponent(PROMO_API_URL))
+                    fetchWithProxy(CUSTOMER_API_URL),
+                    fetchWithProxy(PROMO_API_URL)
                 ]);
 
-                if (!resCustomers.ok || !resPromo.ok) {
-                    throw new Error("無法連接至 Google Sheets 資料來源");
-                }
-
-                const rawCustomersInfo = await resCustomers.json();
-                const rawPromoInfo = await resPromo.json();
-
-                customersData = Array.isArray(rawCustomersInfo) ? rawCustomersInfo : (rawCustomersInfo.data || Object.values(rawCustomersInfo)[0] || []);
-                rawPromoList = Array.isArray(rawPromoInfo) ? rawPromoInfo : (rawPromoInfo.data || Object.values(rawPromoInfo)[0] || []);
+                customersData = Array.isArray(resCustomers) ? resCustomers : (resCustomers.data || Object.values(resCustomers)[0] || []);
+                rawPromoList = Array.isArray(resPromo) ? resPromo : (resPromo.data || Object.values(resPromo)[0] || []);
 
                 console.log("✅ Google Sheets 資料已載入完畢！");
 
