@@ -1236,13 +1236,107 @@
         const CUSTOMERS_API = "https://script.google.com/macros/s/AKfycbx94HC0BGOGI65zY49hgH1SfNd-n6pthAMZKJVZhKY_7t0qs-Zt4RIu0DE1xyprmETuxQ/exec";
         const PROMOTIONS_API = "https://script.google.com/macros/s/AKfycbzlluNWg60I6cLZ_Tzfde4oABj31cNJzS8dAGkPM6MOzTdsvLCBV_5ghpGwkNqMoj6e/exec";
 
-        // 初始化資料庫
+        // 輔助函式：將新資料存入快取
+        function saveToCache(type, data) {
+            try {
+                localStorage.setItem(`sale_demo_${type}`, JSON.stringify(data));
+                localStorage.setItem(`sale_demo_${type}_time`, Date.now());
+            } catch (e) {
+                console.warn('儲存至 localStorage 失敗', e);
+            }
+        }
+
+        // 輔助函式：讀取快取
+        function getFromCache(type) {
+            try {
+                const dataStr = localStorage.getItem(`sale_demo_${type}`);
+                if (dataStr) {
+                    return JSON.parse(dataStr);
+                }
+            } catch (e) {
+                console.warn('讀取 localStorage 失敗', e);
+            }
+            return null;
+        }
+
+        // 背景同步最新資料
+        async function fetchFreshDataInBackground() {
+            const headerText = document.getElementById('header-db-text');
+            if (headerText) headerText.textContent = "🔄 雲端資料同步中...";
+
+            try {
+                const [customersRes, promotionsRes] = await Promise.all([
+                    fetch(CUSTOMERS_API, { method: 'GET', redirect: 'follow' }).then(async r => {
+                        if (!r.ok) throw new Error(`Customers API Error: ${r.status}`);
+                        return r.json();
+                    }),
+                    fetch(PROMOTIONS_API, { method: 'GET', redirect: 'follow' }).then(async r => {
+                        if (!r.ok) throw new Error(`Promotions API Error: ${r.status}`);
+                        return r.json();
+                    })
+                ]);
+
+                // 更新記憶體
+                customersData = Array.isArray(customersRes) ? customersRes : (customersRes.data || []);
+                promotionsData = Array.isArray(promotionsRes) ? promotionsRes : (promotionsRes.data || []);
+
+                // 更新快取
+                saveToCache('customers', customersData);
+                saveToCache('promotions', promotionsData);
+
+                console.log("✅ 雲端資料背景同步完成！");
+                if (headerText) headerText.textContent = "雲端資料已連線 (最新)";
+
+                // 若此時已有登入的客戶且正在看商品頁，可能需要重新渲染商品？
+                // 為求簡單穩健，這裡只做資料換底層，下次重讀或搜尋才套用。
+                // 若要即時觸發更新也可呼叫：
+                if (currentCustomer && allProducts.length > 0) {
+                    // 清除舊組合，強制重組（可選）
+                    allProducts = [];
+                    loadProducts();
+                }
+
+            } catch (err) {
+                console.error("背景同步失敗:", err);
+                if (headerText) {
+                    headerText.textContent = "雲端資料已連線 (無法更新, 請檢查網路)";
+                }
+            }
+        }
+
+        // 初始化資料庫 (支援快取機制)
         async function initDatabase() {
             try {
-                document.getElementById('db-status-text').textContent = "正在從雲端載入最新企業資料庫...";
+                // 1. 嘗試從 localStorage 讀取
+                const cachedCustomers = getFromCache('customers');
+                const cachedPromotions = getFromCache('promotions');
+
+                // 2. 如果有快取，我們「瞬間」啟動系統，然後在背景同步
+                if (cachedCustomers && cachedPromotions) {
+                    customersData = cachedCustomers;
+                    promotionsData = cachedPromotions;
+                    console.log("⚡ 從本機快取瞬間載入資料！");
+
+                    document.getElementById('db-indicator').classList.add('ready');
+                    document.getElementById('db-status-text').textContent = "系統連線正常，可隨時登入。 (載入自快取)";
+                    document.getElementById('db-status-text').style.color = "#10b981";
+
+                    const headerText = document.getElementById('header-db-text');
+                    if (headerText) headerText.textContent = "本機快取已連線，準備同步";
+
+                    document.getElementById('login-input').disabled = false;
+                    document.getElementById('btn-login').disabled = false;
+                    document.getElementById('login-input').focus();
+
+                    // 背景同步
+                    fetchFreshDataInBackground();
+                    return;
+                }
+
+                // 3. 如果完全沒快取 (第一次開啟)，我們必須等待 (Blocking load)
+                document.getElementById('db-status-text').textContent = "正在從雲端首次載入最新企業資料庫 (需時約 5~10 秒)...";
 
                 // 並行獲取 Customers 和 Promotions
-                // Google Apps Script 會回傳 302 導向到另一個網域，所以必須確保 redirect: 'follow'
                 const [customersRes, promotionsRes] = await Promise.all([
                     fetch(CUSTOMERS_API, { method: 'GET', redirect: 'follow' }).then(async r => {
                         if (!r.ok) throw new Error(`Customers API Error: ${r.status}`);
@@ -1257,6 +1351,10 @@
                 // 處理回傳格式
                 customersData = Array.isArray(customersRes) ? customersRes : (customersRes.data || []);
                 promotionsData = Array.isArray(promotionsRes) ? promotionsRes : (promotionsRes.data || []);
+
+                // 存入快取給下次用
+                saveToCache('customers', customersData);
+                saveToCache('promotions', promotionsData);
 
                 console.log("✅ 雲端資料庫已載入完畢！");
 
